@@ -1,10 +1,10 @@
-package bench_cgroups
+package bench
 
 import (
     "testing"
     "fmt"
     "github.com/rcrowley/go-metrics"
-    // "common"
+    "common"
 )
 
 func init() {

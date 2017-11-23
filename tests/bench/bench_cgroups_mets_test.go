@@ -1,4 +1,4 @@
-package bench_cgroups
+package bench
 
 import (
     // "github.com/docker/docker/client"
