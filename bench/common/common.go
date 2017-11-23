@@ -1,5 +1,8 @@
 package common
 
+import (
+    "testing"
+)
 
 func RunParallel(b *testing.B, task func()) {
     b.ReportAllocs()

@@ -3,8 +3,9 @@ package bench
 import (
     // "github.com/docker/docker/client"
     // "github.com/yandex/porto/blob/master/src/api/go"
-    "fmt"
-    "common"
+    // "fmt"
+    "testing"
+    "bench.met/bench/common"
 )
 
 func BenchmarkDecayMetrics1k(b *testing.B) {
