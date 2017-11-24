@@ -2,14 +2,10 @@ package bench
 
 import (
     "testing"
-    "fmt"
+    // "fmt"
     "github.com/rcrowley/go-metrics"
     "bench.met/bench/common"
 )
-
-func init() {
-    fmt.Println("Starting benchs")
-}
 
 func makeMetrics(size int) (m metrics.Histogram) {
     s := metrics.NewExpDecaySample(size, 0.015)
