@@ -1,20 +1,39 @@
 package bench
 
 import (
-    _ "github.com/docker/docker/client"
+
+    docker "github.com/docker/docker/client"
+
+    "github.com/docker/docker/api/types"
+    "github.com/docker/docker/api/types/container"
+
     "porto" // local link to "github.com/yandex/porto/src/api/go/porto"
     "testing"
     "fmt"
     "bench.met/bench/common"
     "os"
     "bytes"
+    //"time"
     // "strconv"
-)
 
-var (
+    "encoding/json"
+    // "log"
+    "golang.org/x/net/context"
+    "io/ioutil"
+
+    //"github.com/docker/docker/daemon/stats"
+    )
+
+
+const (
+    //localVersion = "1.30"
     containerPorto = "dork.porto"
     containerDocker = "dork.docker"
 
+    dockerImage = "ubuntu"
+    )
+
+var (
     portoProps = []string{
         "cpu_usage",
         "memory_usage",
@@ -24,16 +43,11 @@ var (
 )
 
 func dumpPortoResult(r *map[string]map[string]porto.TPortoGetResponse) {
-    // return
-
     for _, v := range *r {
         for _, value := range v {
             if value.Error != 0 {
                 fmt.Printf("response error [%d] %s\n", value.Error, value.ErrorMsg)
             }
-            // else {
-            //     fmt.Printf("%s.%s %s\n", app, metric, value.Value)
-            // }
         }
     }
 }
@@ -71,7 +85,7 @@ func clearPorto(api porto.API) {
 }
 
 
-func benchmarkPortoParallel(b *testing.B) {
+func benchmarkPortoMetricsPar(b *testing.B) {
     api := makePortoApi()
 
     defer api.Close()
@@ -89,7 +103,7 @@ func benchmarkPortoParallel(b *testing.B) {
     fmt.Println("I'm done")
 }
 
-func BenchmarkPortoPlain(b *testing.B) {
+func BenchmarkPortoMetrics(b *testing.B) {
     api := makePortoApi()
 
     defer api.Close()
@@ -126,14 +140,17 @@ func scanMetrics(raw []byte) (utime, ctime int) {
 
     // fmt.Printf("utime [%s], ctime [%s]\n", mets[13], mets[14])
     // fmt.Printf("utime %d, ctime %d\n", utime, ctime)
+
     return
 }
 
-func BenchmarkProcFsPlain(b *testing.B) {
+func BenchmarkProcMetrics(b *testing.B) {
 
     pid := os.Getpid()
     pageSize := os.Getpagesize()
+
     statFile, err := os.Open(fmt.Sprintf("/proc/%d/stat", pid))
+
     if err != nil {
         panic(err)
     }
@@ -150,5 +167,124 @@ func BenchmarkProcFsPlain(b *testing.B) {
 
         scanMetrics(buf)
         statFile.Seek(0, 0)
+    }
+}
+
+func makeDockerClient(ctx context.Context) (cli *docker.Client, id string) {
+    cli, err := docker.NewEnvClient()
+    if err != nil {
+        panic(err)
+    }
+
+    conf := container.Config{}
+
+    conf.Image = dockerImage
+    conf.Tty = true
+
+    hostConf := container.HostConfig{}
+    hostConf.AutoRemove = true
+
+    cont, err := cli.ContainerCreate(ctx, &conf, &hostConf, nil, containerDocker)
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println("start")
+    id = cont.ID
+    options := types.ContainerStartOptions{}
+    cli.ContainerStart(ctx, id, options)
+
+    return
+}
+
+func cleanupDockerContainer(ctx context.Context, cli *docker.Client, id string) {
+    if err := cli.ContainerKill(ctx, id, "KILL"); err != nil {
+        panic(err)
+    }
+}
+
+
+func getDockerStats(ctx context.Context, client *docker.Client, id string, stream bool) (out types.Stats) {
+    stats, err := client.ContainerStats(ctx, id, stream)
+    if err != nil {
+        panic(err)
+    }
+
+    // fmt.Printf("stats %V\n", stats.Body)
+    defer stats.Body.Close()
+
+    dec := json.NewDecoder(stats.Body)
+    if err := dec.Decode(out); err != nil {
+        fmt.Printf("error %v\n", err)
+    }
+
+    return
+}
+
+
+func BenchmarkDockerMetrics(b *testing.B) {
+    ctx := context.Background()
+
+    cli, id := makeDockerClient(ctx)
+    defer cleanupDockerContainer(ctx, cli, id)
+
+    b.ResetTimer()
+
+    b.Run("sequental", func (b *testing.B) {
+        for i := 0; i < b.N; i++ {
+            getDockerStats(ctx, cli, containerDocker, false)
+        }
+    })
+
+    b.StopTimer()
+}
+
+
+// TODO: broken
+// func BenchmarkDockerMetricsPar(b *testing.B) {
+//     ctx := context.Background()
+//
+//     cli, id := makeDockerClient(ctx)
+//     defer cleanupDockerContainer(ctx, cli, id)
+//
+//     b.ResetTimer()
+//     b.RunParallel(func(pb *testing.PB) {
+//         for pb.Next() {
+//             getDockerStats(ctx, cli, containerDocker, false)
+//         }
+//     })
+//
+//     b.StopTimer()
+// }
+
+
+func BenchmarkReadProcFile(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        _, err := ioutil.ReadFile("/proc/meminfo")
+        if err != nil {
+            panic(err)
+        }
+    }
+}
+
+func BenchmarkReadSysFsFile(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        _, err := ioutil.ReadFile("/proc/meminfo")
+        if err != nil {
+            panic(err)
+        }
+    }
+}
+
+
+func BenchmarkOpenClose(b *testing.B) {
+    for i := 0; i < b.N; i++ {
+        func () {
+            statsFile, err := os.Open("/proc/meminfo")
+            defer statsFile.Close()
+            if err != nil {
+                panic(err)
+            }
+        }()
     }
 }
