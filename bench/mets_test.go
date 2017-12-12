@@ -2,7 +2,6 @@ package bench
 
 import (
     "testing"
-    // "fmt"
     "github.com/rcrowley/go-metrics"
     "bench.met/bench/common"
 )
