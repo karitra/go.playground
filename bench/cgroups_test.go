@@ -7,16 +7,11 @@ import (
     "bench.met/bench/common"
     "os"
     "bytes"
-    //"time"
-    // "strconv"
 
     "encoding/json"
-    // "log"
     "golang.org/x/net/context"
     "io/ioutil"
-    // "io"
-    //"github.com/docker/docker/daemon/stats"
-    )
+)
 
 
 const (

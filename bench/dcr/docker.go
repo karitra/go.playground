@@ -4,7 +4,7 @@
 //  docker/docker/client is using socket desc per connection
 //
 //
-package bench
+package dcr
 
 import (
     docker "github.com/docker/docker/client"
