@@ -24,6 +24,84 @@ func timeTrack(start time.Time, name string) {
 }
 
 
+func dockerProcStream(workers int, toRun time.Duration) {
+    fmt.Println("Running docker-stream sample")
+    defer fmt.Println("done")
+
+    s := metrics.NewExpDecaySample(1028, 0.015)
+    parseTimings := metrics.NewHistogram(s)
+    metrics.Register("parseDockerTimings", parseTimings)
+
+    ctx := context.Background()
+    cli, err := dcr.MakeDockerClient()
+    if err != nil {
+        panic(err)
+    }
+
+    defer cli.Close()
+
+    control := make(chan bool, workers)
+    results := make(chan Result, workers)
+    ready := make(chan bool, workers)
+    start := make(chan bool, workers)
+
+    for i := 0; i < workers; i++ {
+        id, err := dcr.MakeDockerContainer(ctx, cli, fmt.Sprintf("docker.%d", i))
+        if err != nil {
+            panic(err)
+        }
+        defer dcr.CleanupDockerContainer(ctx, cli, id)
+
+        go func() {
+            stream := dcr.GetDockerStatsStream(ctx, cli, id)
+            defer stream.Close()
+
+            dec := json.NewDecoder(stream)
+
+            var done bool
+            var count int
+
+            ready <- true
+            <- start
+
+            for !done {
+                select {
+                case done = <- control:
+                default:
+                    now := time.Now()
+                    dcr.ParseDockerStats(dec)
+                    count++
+                    parseTimings.Update(int64(time.Since(now)))
+                }
+            }
+
+            results <- Result{count}
+        }()
+    }
+
+    for i := 0; i < workers; i++ {
+        <- ready
+    }
+
+    fmt.Printf("All %d subroutines are ready\n", workers)
+    close(start)
+
+    t := time.NewTimer(toRun)
+    select {
+    case <- t.C:
+        fmt.Println("completion timer fired")
+
+        sum := 0
+        for i := 0; i < workers; i++ {
+            control <- true
+            res := <- results
+            sum += res.count
+        }
+
+        fmt.Printf("total requests: %d, avg time %.2fms\n", sum, parseTimings.Mean() / math.Pow(1000.0,2))
+    }
+}
+
 func dockerProc(workers int, toRun time.Duration) {
     fmt.Println("Running docker sample")
     defer fmt.Println("done")
@@ -52,11 +130,7 @@ func dockerProc(workers int, toRun time.Duration) {
         }
         defer dcr.CleanupDockerContainer(ctx, cli, id)
 
-        stream := dcr.GetDockerStatsStream(ctx, cli, id)
         go func() {
-            defer stream.Close()
-
-            dec := json.NewDecoder(stream)
 
             var done bool
             var count int
@@ -69,7 +143,7 @@ func dockerProc(workers int, toRun time.Duration) {
                 case done = <- control:
                 default:
                     now := time.Now()
-                    dcr.ParseDockerStats(dec)
+                    dcr.GetDockerStats(ctx, cli, id)
                     count++
                     parseTimings.Update(int64(time.Since(now)))
                 }
@@ -79,11 +153,11 @@ func dockerProc(workers int, toRun time.Duration) {
         }()
     }
 
-    for i := 0; i < workersCount; i++ {
+    for i := 0; i < workers; i++ {
         <- ready
     }
 
-    fmt.Printf("All %d subroutines are ready\n", workersCount)
+    fmt.Printf("All %d subroutines are ready\n", workers)
     close(start)
 
     t := time.NewTimer(toRun)
@@ -93,7 +167,7 @@ func dockerProc(workers int, toRun time.Duration) {
 
         sum := 0
 
-        for i := 0; i < workersCount; i++ {
+        for i := 0; i < workers; i++ {
             control <- true
             res := <- results
             sum += res.count
@@ -104,6 +178,9 @@ func dockerProc(workers int, toRun time.Duration) {
 }
 
 func portoProc(workers int, toRun time.Duration) {
+    fmt.Println("Running porto sample")
+    defer fmt.Println("done")
+
     var containers []string
 
     control := make(chan bool, workers)
@@ -123,6 +200,7 @@ func portoProc(workers int, toRun time.Duration) {
     metrics.Register("memoryTimings", memoryTimings)
 
     for i := 0; i < workers; i++ {
+
         name := fmt.Sprintf("porto.%d", i)
 
         go func(name string) {
@@ -136,7 +214,11 @@ func portoProc(workers int, toRun time.Duration) {
                 panic(err)
             }
 
-            defer api.Close()
+            defer func() {
+                if err := api.Close(); err != nil {
+                    panic(err)
+                }
+            }()
 
             err := prt.MakePortoContainer(api, name)
             if err != nil {
@@ -165,8 +247,6 @@ func portoProc(workers int, toRun time.Duration) {
                     memory_usage, _ := prt.GetPortoMem(api, name)
 
                     parseTimings.Update(int64(time.Since(now)))
-
-                    // fmt.Printf("cpu usage is %d\n", cpu_usage)
 
                     cpuTimings.Update(int64(cpu_usage))
                     memoryTimings.Update(int64(memory_usage))
@@ -202,7 +282,7 @@ func portoProc(workers int, toRun time.Duration) {
 func main() {
     workersPtr := flag.Int("workers", workersCount, "conatiners to spawn")
     secToBenchPtr := flag.Uint64("time", toWaitSec, "time to run (seconds)")
-    subSystemPtr := flag.String("iso", "all", "which subsystem to test (porto|docker|procfs|all)")
+    subSystemPtr := flag.String("iso", "all", "which subsystem to test (porto|docker-stream|docker|procfs|all)")
 
     flag.Parse()
 
@@ -211,8 +291,11 @@ func main() {
         portoProc(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
     case "docker":
         dockerProc(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
+    case "docker-stream":
+        dockerProcStream(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
     case "all":
         dockerProc(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
+        dockerProcStream(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
         portoProc(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
     }
 }

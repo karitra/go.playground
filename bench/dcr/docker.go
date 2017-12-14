@@ -86,8 +86,8 @@ func ParseDockerStats(dec *json.Decoder) (out types.Stats) {
 }
 
 
-func GetDockerStats(ctx context.Context, client *docker.Client, id string, stream bool) (out types.Stats) {
-    stats, err := client.ContainerStats(ctx, id, stream)
+func GetDockerStats(ctx context.Context, client *docker.Client, id string) (out types.Stats) {
+    stats, err := client.ContainerStats(ctx, id, false)
     if err != nil {
         panic(err)
     }
