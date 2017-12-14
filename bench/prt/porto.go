@@ -14,12 +14,6 @@ func MakePortoContainer(api porto.API, name string) error {
         return err
     }
 
-    defer func() {
-        if r := recover(); r != nil {
-            api.Close()
-        }
-    }()
-
     if err := api.SetProperty(name, "command", "bash -c 'while [[ 1 ]]; do sleep 3; done'"); err != nil {
         panic(err)
     }
@@ -35,13 +29,19 @@ func GetPortoProperty(api porto.API, name string, prop string) (string, error) {
     return api.GetProperty(name, prop)
 }
 
-func GetPortoCpu(api porto.API, name string) (uint64, error) {
+func GetPortoCpu(api porto.API, name string) uint64 {
     val, err := GetPortoProperty(api, name, "cpu_usage")
     if err != nil {
-        return 0, err
+        panic(err)
     }
 
-    return strconv.ParseUint(val, 10, 64)
+    var intVal uint64
+    intVal, err = strconv.ParseUint(val, 10, 64)
+    if err != nil {
+        panic(err)
+    }
+
+    return intVal
 }
 
 func CleanupPortoContainer(api porto.API, name string) (err error) {

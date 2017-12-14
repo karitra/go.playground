@@ -28,7 +28,7 @@ func dockerProc(workers int, toRun time.Duration) {
 
     s := metrics.NewExpDecaySample(1028, 0.015)
     parseTimings := metrics.NewHistogram(s)
-    metrics.Register("parseTimings", parseTimings)
+    metrics.Register("parseDockerTimings", parseTimings)
 
     ctx := context.Background()
     cli, err := dcr.MakeDockerClient()
@@ -107,18 +107,25 @@ func portoProc(workers int, toRun time.Duration) {
         panic(err)
     }
 
-    defer api.Close()
+    defer func() {
+        if err := api.Close(); err != nil {
+            panic(err)
+        }
+    }()
 
     var containers []string
 
     control := make(chan bool, workers)
+    results := make(chan Result, workers)
+
+    s := metrics.NewExpDecaySample(1028, 0.015)
+    parseTimings := metrics.NewHistogram(s)
+    metrics.Register("parsePortoTimings", parseTimings)
 
     for i := 0; i < workers; i++ {
-        var err error
-
         name := fmt.Sprintf("porto.%d", i)
 
-        err = prt.MakePortoContainer(api, name)
+        err := prt.MakePortoContainer(api, name)
         if err != nil {
             panic(err)
         }
@@ -131,24 +138,40 @@ func portoProc(workers int, toRun time.Duration) {
         }
         containers = append(containers, name)
 
-        go func() {
+        go func(name string) {
+            defer prt.CleanupPortoContainer(api, name)
+
             var done bool
+            var count int
+
             for !done {
-                // switch {
-                //     case done = <- control:
-                //         break
-                // }
+                select {
+                case done = <-control:
+                default:
+                    now := time.Now()
+                    count++
+                    cpu_usage := prt.GetPortoCpu(api, name)
+                    parseTimings.Update(int64(time.Since(now)))
+
+                    time.Sleep(1 * time.Second)
+                    fmt.Printf("cpu usage is %d\n", cpu_usage)
+                }
             }
-        }()
+        }(name)
     }
 
     t := time.NewTimer(toRun)
     select {
     case <- t.C:
             fmt.Println("completion timer expired")
+
+            var sum int
             for i := 0; i < workers; i++ {
                 control <- true
+                sum += (<- results).count
             }
+
+            fmt.Printf("total requests: %d, avg time %.2fms\n", sum, parseTimings.Mean() / math.Pow(1000.0,2))
     }
 }
 
