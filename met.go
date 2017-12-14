@@ -10,6 +10,7 @@ import (
     "encoding/json"
     "flag"
     "github.com/rcrowley/go-metrics"
+    "porto"
 )
 
 const workersCount = 100
@@ -21,6 +22,7 @@ func timeTrack(start time.Time, name string) {
     elapsed := time.Since(start)
     fmt.Printf("%s took %s\n", name, elapsed)
 }
+
 
 func dockerProc(workers int, toRun time.Duration) {
     fmt.Println("Running docker sample")
@@ -102,17 +104,6 @@ func dockerProc(workers int, toRun time.Duration) {
 }
 
 func portoProc(workers int, toRun time.Duration) {
-    api, err := prt.MakePortoApi()
-    if err != nil {
-        panic(err)
-    }
-
-    defer func() {
-        if err := api.Close(); err != nil {
-            panic(err)
-        }
-    }()
-
     var containers []string
 
     control := make(chan bool, workers)
@@ -122,23 +113,43 @@ func portoProc(workers int, toRun time.Duration) {
     parseTimings := metrics.NewHistogram(s)
     metrics.Register("parsePortoTimings", parseTimings)
 
+    // useless for now
+    s = metrics.NewExpDecaySample(1028, 0.015)
+    cpuTimings := metrics.NewHistogram(s)
+    metrics.Register("cpuTimings", cpuTimings)
+
+    s = metrics.NewExpDecaySample(1028, 0.015)
+    memoryTimings := metrics.NewHistogram(s)
+    metrics.Register("memoryTimings", memoryTimings)
+
     for i := 0; i < workers; i++ {
         name := fmt.Sprintf("porto.%d", i)
 
-        err := prt.MakePortoContainer(api, name)
-        if err != nil {
-            panic(err)
-        }
-
-        defer prt.CleanupPortoContainer(api, name)
-
-        err = prt.RunPortoContainer(api, name)
-        if err != nil {
-            panic(err)
-        }
-        containers = append(containers, name)
-
         go func(name string) {
+            apiCh, errCh := prt.MakePortoApi()
+
+            var api porto.API
+
+            select {
+            case api = <- apiCh:
+            case err := <- errCh:
+                panic(err)
+            }
+
+            defer api.Close()
+
+            err := prt.MakePortoContainer(api, name)
+            if err != nil {
+                panic(err)
+            }
+
+            err = prt.RunPortoContainer(api, name)
+            if err != nil {
+                panic(err)
+            }
+            containers = append(containers, name)
+            // startTs := time.Now()
+
             defer prt.CleanupPortoContainer(api, name)
 
             var done bool
@@ -149,15 +160,23 @@ func portoProc(workers int, toRun time.Duration) {
                 case done = <-control:
                 default:
                     now := time.Now()
-                    count++
-                    cpu_usage := prt.GetPortoCpu(api, name)
+
+                    cpu_usage, _ := prt.GetPortoCpu(api, name)
+                    memory_usage, _ := prt.GetPortoMem(api, name)
+
                     parseTimings.Update(int64(time.Since(now)))
 
-                    time.Sleep(1 * time.Second)
-                    fmt.Printf("cpu usage is %d\n", cpu_usage)
+                    // fmt.Printf("cpu usage is %d\n", cpu_usage)
+
+                    cpuTimings.Update(int64(cpu_usage))
+                    memoryTimings.Update(int64(memory_usage))
+
+                    count++
                 }
             }
-        }(name)
+
+            results <- Result{ count }
+        } (name)
     }
 
     t := time.NewTimer(toRun)
@@ -171,7 +190,12 @@ func portoProc(workers int, toRun time.Duration) {
                 sum += (<- results).count
             }
 
-            fmt.Printf("total requests: %d, avg time %.2fms\n", sum, parseTimings.Mean() / math.Pow(1000.0,2))
+            fmt.Printf("total requests: %d, avg time %.2fms\nmax cpu_usage %d, memory_usage %d\n",
+                sum,
+                parseTimings.Mean() / math.Pow(1000.0,2),
+                cpuTimings.Max(),
+                memoryTimings.Max(),
+            )
     }
 }
 
