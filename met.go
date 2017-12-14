@@ -279,14 +279,130 @@ func portoProc(workers int, toRun time.Duration) {
     }
 }
 
+
+func portoProcReconnect(workers int, toRun time.Duration) {
+    fmt.Println("Running porto-reconnect sample")
+    defer fmt.Println("done")
+
+    var containers []string
+
+    control := make(chan bool, workers)
+    results := make(chan Result, workers)
+
+    s := metrics.NewExpDecaySample(1028, 0.015)
+    parseTimings := metrics.NewHistogram(s)
+    metrics.Register("parsePortoTimings", parseTimings)
+
+    // useless for now
+    s = metrics.NewExpDecaySample(1028, 0.015)
+    cpuTimings := metrics.NewHistogram(s)
+    metrics.Register("cpuTimings", cpuTimings)
+
+    s = metrics.NewExpDecaySample(1028, 0.015)
+    memoryTimings := metrics.NewHistogram(s)
+    metrics.Register("memoryTimings", memoryTimings)
+
+    for i := 0; i < workers; i++ {
+
+        name := fmt.Sprintf("porto.%d", i)
+
+        go func(name string) {
+            apiCh, errCh := prt.MakePortoApi()
+
+            var api porto.API
+            select {
+            case api = <- apiCh:
+            case err := <- errCh:
+                panic(err)
+            }
+
+            err := prt.MakePortoContainer(api, name)
+            if err != nil {
+                panic(err)
+            }
+
+            err = prt.RunPortoContainer(api, name)
+            if err != nil {
+                panic(err)
+            }
+            containers = append(containers, name)
+            // startTs := time.Now()
+
+            var done bool
+            var count int
+
+            for !done {
+                select {
+                case done = <-control:
+                default:
+                    now := time.Now()
+
+                    apiCh, errCh := prt.MakePortoApi()
+
+                    var api porto.API
+                    select {
+                    case api = <- apiCh:
+                    case err := <- errCh:
+                        panic(err)
+                    }
+
+                    cpu_usage, _ := prt.GetPortoCpu(api, name)
+                    memory_usage, _ := prt.GetPortoMem(api, name)
+
+                    if err := api.Close(); err != nil {
+                        panic(err)
+                    }
+
+                    parseTimings.Update(int64(time.Since(now)))
+
+                    cpuTimings.Update(int64(cpu_usage))
+                    memoryTimings.Update(int64(memory_usage))
+
+                    count++
+                }
+            }
+
+            prt.CleanupPortoContainer(api, name)
+            if err := api.Close(); err != nil {
+                panic(err)
+            }
+
+            results <- Result{ count }
+        } (name)
+    }
+
+    t := time.NewTimer(toRun)
+    select {
+    case <- t.C:
+            fmt.Println("completion timer expired")
+
+            var sum int
+            for i := 0; i < workers; i++ {
+                control <- true
+                sum += (<- results).count
+            }
+
+            fmt.Printf("total requests: %d, avg time %.2fms\nmax cpu_usage %d, memory_usage %d\n",
+                sum,
+                parseTimings.Mean() / math.Pow(1000.0,2),
+                cpuTimings.Max(),
+                memoryTimings.Max(),
+            )
+    }
+}
+
+
 func main() {
     workersPtr := flag.Int("workers", workersCount, "conatiners to spawn")
     secToBenchPtr := flag.Uint64("time", toWaitSec, "time to run (seconds)")
-    subSystemPtr := flag.String("iso", "all", "which subsystem to test (porto|docker-stream|docker|procfs|all)")
+    subSystemPtr := flag.String("iso", "all",
+        "which subsystem to test (porto|proto-reco|docker-stream|docker|procfs|all)")
 
     flag.Parse()
 
     switch *subSystemPtr {
+    case "porto-reco":
+        portoProcReconnect(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
     case "porto":
         portoProc(*workersPtr, time.Duration(*secToBenchPtr) * time.Second)
     case "docker":
