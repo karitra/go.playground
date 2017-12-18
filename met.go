@@ -275,6 +275,9 @@ func portoProc(workers int, toRun time.Duration) {
     }
 }
 
+//
+// If container in stop state it returns empty string!
+//
 func portoProcVec(workers int, toRun time.Duration, nonblock bool, dumpMetrics bool) {
     fmt.Println("Running porto-vec sample")
     defer fmt.Println("done")
@@ -348,20 +351,21 @@ func portoProcVec(workers int, toRun time.Duration, nonblock bool, dumpMetrics b
             select {
             case done = <- control:
             default:
-
                 now := time.Now()
+
                 res, err := api.Get3(containers, metrics, nonblock)
                 if err != nil {
                     panic(err)
                 }
-                parseTimings.UpdateSince(now)
-
-                count ++
 
                 for cont, props := range res {
+
+                    var cpu_usage uint64
+                    var uptime uint64
+
                     for name, value := range props {
 
-                        // fmt.Printf("%v.%v %v\n", cont, name, value.Value)
+                        // fmt.Printf("%v.%v [%v]\n", cont, name, value.Value)
 
                         switch name {
                         case "net_tx_bytes", "net_rx_bytes":
@@ -371,12 +375,25 @@ func portoProcVec(workers int, toRun time.Duration, nonblock bool, dumpMetrics b
                         default:
                             if v, err := strconv.ParseUint(value.Value, 10, 64); err == nil {
                                 procMetrics(cont, name, v)
-                            }
+
+                                if name == "cpu_usage" {
+                                    cpu_usage = v
+                                } else if name == "time" {
+                                    uptime = v
+                                }
+                            } // if ...
                         }
 
-                    }
-                }
-            }
+                        if uptime > 0 {
+                            cpu_load := float64(cpu_usage) / float64(uptime * 1000000000) // uint64(time.Nanosecond))
+                            procMetrics(cont, "load", uint64(cpu_load * 100.0))
+                        }
+                    } // for name, value
+
+                    parseTimings.UpdateSince(now)
+                    count ++
+                } // for cont, props
+            } // select
         } // for !done
 
         results <- Result{ count }
