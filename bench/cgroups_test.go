@@ -11,14 +11,16 @@ import (
     "encoding/json"
     "golang.org/x/net/context"
     "io/ioutil"
-)
 
+    "bench.met/bench/dcr"
+    //"bench.met/bench/prt"
+)
 
 const (
     //localVersion = "1.30"
     containerPorto = "dork.porto"
     containerDocker = "dork.docker"
-    )
+)
 
 var (
     portoProps = []string{
@@ -72,7 +74,7 @@ func clearPorto(api porto.API) {
 }
 
 
-func benchmarkPortoMetricsPar(b *testing.B) {
+func BenchmarkPortoMetricsPar(b *testing.B) {
     api := makePortoApi()
 
     defer api.Close()
@@ -159,16 +161,16 @@ func BenchmarkProcMetrics(b *testing.B) {
 func BenchmarkDockerMetrics(b *testing.B) {
     ctx := context.Background()
 
-    cli, _ := MakeDockerClient()
+    cli, _ := dcr.MakeDockerClient()
     defer cli.Close()
 
-    id, _ := MakeDockerContainer(ctx, cli, containerDocker)
-    defer CleanupDockerContainer(ctx, cli, id)
+    id, _ := dcr.MakeDockerContainer(ctx, cli, containerDocker)
+    defer dcr.CleanupDockerContainer(ctx, cli, id)
 
     b.ResetTimer()
     b.Run("sequental", func (b *testing.B) {
         for i := 0; i < b.N; i++ {
-            GetDockerStats(ctx, cli, containerDocker, false)
+            dcr.GetDockerStats(ctx, cli, containerDocker)
         }
     })
     b.StopTimer()
@@ -178,22 +180,22 @@ func BenchmarkDockerMetrics(b *testing.B) {
 func BenchmarkDockerMetricsStream(b *testing.B) {
     ctx := context.Background()
 
-    cli, _ := MakeDockerClient()
+    cli, _ := dcr.MakeDockerClient()
     defer cli.Close()
 
-    id, _ := MakeDockerContainer(ctx, cli, containerDocker)
-    defer CleanupDockerContainer(ctx, cli, id)
+    id, _ := dcr.MakeDockerContainer(ctx, cli, containerDocker)
+    defer dcr.CleanupDockerContainer(ctx, cli, id)
 
-    stream := GetDockerStatsStream(ctx, cli, id)
+    stream := dcr.GetDockerStatsStream(ctx, cli, id)
     defer stream.Close()
 
     dec := json.NewDecoder(stream)
-    ParseDockerStats(dec)
+    dcr.ParseDockerStats(dec)
 
     b.ResetTimer()
     b.Run("sequental", func (b *testing.B) {
         for i := 0; i < b.N; i++ {
-            ParseDockerStats(dec)
+            dcr.ParseDockerStats(dec)
         }
     })
 
@@ -204,16 +206,16 @@ func BenchmarkDockerMetricsStream(b *testing.B) {
 func BenchmarkDockerMetricsPar(b *testing.B) {
     ctx := context.Background()
 
-    cli, _ := MakeDockerClient()
+    cli, _ := dcr.MakeDockerClient()
     defer cli.Close()
 
-    id, _ := MakeDockerContainer(ctx, cli, containerDocker)
-    defer CleanupDockerContainer(ctx, cli, id)
+    id, _ := dcr.MakeDockerContainer(ctx, cli, containerDocker)
+    defer dcr.CleanupDockerContainer(ctx, cli, id)
 
     b.ResetTimer()
     b.RunParallel(func(pb *testing.PB) {
         for pb.Next() {
-            GetDockerStats(ctx, cli, id, false)
+            dcr.GetDockerStats(ctx, cli, id)
         }
     })
 
